@@ -1,6 +1,6 @@
 python-telegram-bot==13.15
 requests==2.32.4
-six==1.16.0
-urllib3==1.26.18
+six==1.17.0
+urllib3==2.5.0
 APScheduler==3.6.3
-tzlocal==2.1
+tzlocal==5.3.1

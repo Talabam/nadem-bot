@@ -1,148 +1,145 @@
-# -*- coding: utf-8 -*-
-import logging
-from telegram import Update, Message, ChatAction
-from telegram.ext import Updater, MessageHandler, CommandHandler, Filters, CallbackContext
-import requests
+import os
+import json
 import time
-import re
+import logging
+import requests
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 
-# توکن رباتت
-BOT_TOKEN = "7977751221:AAHBPEXCseUUdFIqX0Tumw7lqzxVR_Mz7LM"
-OPENROUTER_API_KEY = "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"
+# ======================== تنظیمات ========================
+OWNER_ID = 7447486443
+OFFLINE_FILE = "offline_state.json"
+INTRO_TRACK_FILE = "intro_timestamps.json"
+MEMORY_FILE = "user_memory.json"
+INTRO_INTERVAL = 3600
+MEMORY_EXPIRATION = 3600
+OPENROUTER_API_KEY = "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"  # 🔒 جایگزین کن
+# ========================================================
 
-OWNER_ID = 736052064
-user_memory = {}  # حافظه چت یک ساعته
-welcome_shown = {}  # پیغام خوشامد ۶ ساعته
-MEMORY_TIMEOUT = 3600
-WELCOME_INTERVAL = 6 * 3600
-
-# تنظیمات لاگ برای نمایش پیام‌های مهم در ترمینال
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
-# وضعیت آنلاین/آفلاین
-is_owner_online = False
+# 🧠 بارگذاری حافظه‌ها
+def load_json(path):
+    return json.loads(Path(path).read_text(encoding='utf-8')) if Path(path).exists() else {}
 
-# دستور آنلاین شدن
-def go_online(update: Update, context: CallbackContext):
-    global is_owner_online
-    if update.effective_user.id == OWNER_ID:
-        is_owner_online = True
-        update.message.reply_text("✅ نادم آنلاین شد.")
+def save_json(path, data):
+    Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 
-# دستور آفلاین شدن
-def go_offline(update: Update, context: CallbackContext):
-    global is_owner_online
-    if update.effective_user.id == OWNER_ID:
-        is_owner_online = False
-        update.message.reply_text("🟠 نادم آفلاین شد.")
+offline_state = load_json(OFFLINE_FILE)
+intro_timestamps = load_json(INTRO_TRACK_FILE)
+user_memory = load_json(MEMORY_FILE)
 
-# بررسی فارسی بودن متن
-def is_persian(text):
-    return bool(re.search(r'[\u0600-\u06FF]', text))
+# 💡 بررسی آنلاین/آفلاین بودن نادم
+def is_offline():
+    return offline_state.get("status") == "offline"
 
-# پاسخ از OpenRouter (GPT)
-def ask_ai(prompt, user_id):
+def set_offline():
+    offline_state["status"] = "offline"
+    save_json(OFFLINE_FILE, offline_state)
+
+def set_online():
+    offline_state["status"] = "online"
+    save_json(OFFLINE_FILE, offline_state)
+
+# 📤 ارسال پیام به API هوش مصنوعی
+def ask_openrouter(prompt, user_id):
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json"
     }
-    messages = [{"role": "system", "content": "تو دستیار نادم هستی. لحن خودمونی و با ایموجی داشته باش."}]
-    
-    # اضافه‌کردن حافظه گفتگو (اگر وجود داشته باشه)
-    if user_id in user_memory:
-        for old in user_memory[user_id]["history"][-6:]:
-            messages.append({"role": "user", "content": old})
+    user_history = user_memory.get(str(user_id), [])
+    user_history = [m for m in user_history if time.time() - m["time"] < MEMORY_EXPIRATION]
 
+    messages = [{"role": "system", "content": "تو یک دستیار فارسی‌زبان، شوخ، خودمونی و صمیمی هستی که فقط فارسی جواب می‌ده."}]
+    messages += [{"role": "user", "content": m["text"]} for m in user_history]
     messages.append({"role": "user", "content": prompt})
 
-    payload = {
-        "model": "openai/gpt-3.5-turbo",
+    data = {
+        "model": "openchat/openchat-7b:free",
         "messages": messages
     }
 
     try:
-        res = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
-        reply = res.json()["choices"][0]["message"]["content"]
-        return reply.strip()
-    except:
-        return "😓 یه مشکلی پیش اومد موقع گرفتن پاسخ. یه بار دیگه بپرس."
+        response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
+        response.raise_for_status()
+        content = response.json()["choices"][0]["message"]["content"]
+        user_history.append({"text": prompt, "time": time.time()})
+        user_memory[str(user_id)] = user_history
+        save_json(MEMORY_FILE, user_memory)
+        return content
+    except Exception as e:
+        return "خطا در ارتباط با هوش مصنوعی 🛠️"
 
-# پاسخ‌های آماده
-def check_special_messages(text):
-    if "تو کی" in text or "نادم کیه" in text or "مالک" in text:
-        return "👤 نادم یه آدم گمنام ولی باهوشه که دنبال آگاه‌سازی مردمه. من دستیار هوش مصنوعی‌شم! 😎"
-    if "یادت نیست" in text or "فراموش" in text:
-        return "🧠 حافظه من هر ۱ ساعت یه بار پاک میشه عزیز! اگه یادت نیست دلیلش اینه 😅"
-    return None
-
-# پیام‌های غیر متنی
-def handle_other_formats(update: Update, context: CallbackContext):
-    msg = update.effective_message
-    msg.reply_text("🎬📸🎤 اوه! این فرمتو نمی‌تونم تحلیل کنم.\nفقط با متن کار می‌کنم فعلاً 😅")
-
-# پیام متنی
-def handle(update: Update, context: CallbackContext):
-    global is_owner_online
-
-    user_id = update.effective_user.id
-    msg = update.message
-    text = msg.text or ""
-
-    if update.effective_user.id == OWNER_ID:
-        return  # به خودت جواب نده
-
-    if is_owner_online:
-        return  # نادم آنلاین باشه، جوابی نده
-
+# ⏰ پیام معرفی اولیه
+def should_send_intro(user_id):
     now = time.time()
+    last = intro_timestamps.get(str(user_id), 0)
+    if now - last >= INTRO_INTERVAL:
+        intro_timestamps[str(user_id)] = now
+        save_json(INTRO_TRACK_FILE, intro_timestamps)
+        return True
+    return False
 
-    # نشون دادن پیام خوشامد فقط هر ۶ ساعت
-    if user_id not in welcome_shown or now - welcome_shown[user_id] > WELCOME_INTERVAL:
+# 🎯 پاسخ به پیام‌های کاربر
+def handle_message(update, context):
+    msg = update.effective_message
+    user = update.effective_user
+
+    if not is_offline():
+        return
+
+    if should_send_intro(user.id):
         msg.reply_text(
-            "👀 نادم الان نیست که بخواد باهات صحبت کنه...\n"
-            "📡 اما نگران نباش! من دستیار هوش مصنوعی نادمم 😎\n"
-            "وظیفه‌م اینه تا وقتی آقا خودش برگشت، حواسم به همه چی باشه!\n\n"
+            "👀 نادم الان نیست که بخواد باهات صحبت کنه...
+"
+            "📡 اما نگران نباش! من دستیار هوش مصنوعی نادمم 😎
+"
+            "وظیفه‌م اینه تا وقتی آقا خودش برگشت، حواسم به همه چی باشه!
+
+"
             "🧠 اگه سوالی داری، همین حالا بپرس تا راهنماییت کنم."
         )
-        welcome_shown[user_id] = now
 
-    # فقط پیام فارسی رو جواب بده
-    if not is_persian(text):
-        msg.reply_text("😅 فقط می‌تونم فارسی جواب بدم. یه بار دیگه با حروف فارسی بپرس لطفاً!")
+    text = msg.text or ""
+
+    lowered = text.lower()
+    if "ندم" in lowered:
+        msg.reply_text("نادم نه عزیز دل، نـ ــادم 😅")
+        return
+    if "نادم" in lowered:
+        msg.reply_text("نادم؟ 😎 خالق من و آقابالاسرمه! فعلاً که خودش نیست ولی من مراقبم!")
+        return
+    if "یادت نیست" in lowered or "یادش نیستی" in lowered or "چرا یادت نمی‌مونه" in lowered:
+        msg.reply_text("🧠 من هر ۱ ساعت حافظه‌م پاک میشه 😅 برای همین چیزایی که گفتی یادم نمی‌مونه!")
         return
 
-    # پاسخ‌های خاص
-    static_reply = check_special_messages(text)
-    if static_reply:
-        msg.reply_text(static_reply)
-        return
+    if msg.text:
+        reply = ask_openrouter(msg.text, user.id)
+        msg.reply_text(reply)
+    else:
+        msg.reply_text("پیامتو دیدم 😄 هر چی با متن بهم بگی بهتر می‌تونم راهنماییت کنم!")
 
-    # ذخیره‌سازی در حافظه
-    if user_id not in user_memory or now - user_memory[user_id]["time"] > MEMORY_TIMEOUT:
-        user_memory[user_id] = {"history": [], "time": now}
-    user_memory[user_id]["history"].append(text)
-    user_memory[user_id]["time"] = now
+# 🎛️ تنظیمات آنلاین/آفلاین توسط نادم
+def go_offline(update, context):
+    if update.effective_user.id == OWNER_ID:
+        set_offline()
+        update.message.reply_text("🟠 نادم آفلاین شد. من مراقبم 😎")
+def go_online(update, context):
+    if update.effective_user.id == OWNER_ID:
+        set_online()
+        update.message.reply_text("🟢 نادم آنلاین شد. دیگه من سکوت می‌کنم 😇")
 
-    # نشون دادن وضعیت تایپ
-    context.bot.send_chat_action(chat_id=msg.chat.id, action=ChatAction.TYPING)
-
-    # گرفتن پاسخ
-    reply = ask_ai(text, user_id)
-    msg.reply_text(reply)
-
-# اجرای اصلی
+# 🚀 اجرای ربات
 def main():
-    updater = Updater(BOT_TOKEN, use_context=True)
+    updater = Updater("7977751221:AAHBPEXCseUUdFIqX0Tumw7lqzxVR_Mz7LM", use_context=True)
     dp = updater.dispatcher
 
-    dp.add_handler(CommandHandler("online", go_online))
     dp.add_handler(CommandHandler("offline", go_offline))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle))
-    dp.add_handler(MessageHandler(~Filters.text, handle_other_formats))
+    dp.add_handler(CommandHandler("online", go_online))
+    dp.add_handler(MessageHandler(Filters.all, handle_message))
 
     updater.start_polling()
-    logging.info("✅ ربات راه‌اندازی شد و آماده پاسخ‌گویی‌ه 😎")
+    logging.info("🤖 ربات راه‌اندازی شد و منتظر پیام‌هاست...")
     updater.idle()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

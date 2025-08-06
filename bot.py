@@ -3,6 +3,7 @@ import json
 import time
 import logging
 import requests
+from pathlib import Path
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 
 # ======================== تنظیمات ========================
@@ -12,12 +13,12 @@ INTRO_TRACK_FILE = "intro_timestamps.json"
 MEMORY_FILE = "user_memory.json"
 INTRO_INTERVAL = 3600
 MEMORY_EXPIRATION = 3600
-OPENROUTER_API_KEY = "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"  # 🔒 جایگزین کن
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
 # ========================================================
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
-# 🧠 بارگذاری حافظه‌ها
 def load_json(path):
     return json.loads(Path(path).read_text(encoding='utf-8')) if Path(path).exists() else {}
 
@@ -28,7 +29,6 @@ offline_state = load_json(OFFLINE_FILE)
 intro_timestamps = load_json(INTRO_TRACK_FILE)
 user_memory = load_json(MEMORY_FILE)
 
-# 💡 بررسی آنلاین/آفلاین بودن نادم
 def is_offline():
     return offline_state.get("status") == "offline"
 
@@ -40,7 +40,6 @@ def set_online():
     offline_state["status"] = "online"
     save_json(OFFLINE_FILE, offline_state)
 
-# 📤 ارسال پیام به API هوش مصنوعی
 def ask_openrouter(prompt, user_id):
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -66,10 +65,9 @@ def ask_openrouter(prompt, user_id):
         user_memory[str(user_id)] = user_history
         save_json(MEMORY_FILE, user_memory)
         return content
-    except Exception as e:
+    except Exception:
         return "خطا در ارتباط با هوش مصنوعی 🛠️"
 
-# ⏰ پیام معرفی اولیه
 def should_send_intro(user_id):
     now = time.time()
     last = intro_timestamps.get(str(user_id), 0)
@@ -79,7 +77,6 @@ def should_send_intro(user_id):
         return True
     return False
 
-# 🎯 پاسخ به پیام‌های کاربر
 def handle_message(update, context):
     msg = update.effective_message
     user = update.effective_user
@@ -89,11 +86,10 @@ def handle_message(update, context):
 
     if should_send_intro(user.id):
         msg.reply_text(
-    """👀 نادم الان نیست که بخواد باهات صحبت کنه...
-📡 اما نگران نباش! من دستیار هوش مصنوعی نادمم 😎
-وظیفه‌م اینه تا وقتی آقا خودش برگشت، حواسم به همه چی باشه!
-
-🧠 اگه سوالی داری، همین حالا بپرس تا راهنماییت کنم."""
+            "👀 نادم الان نیست که بخواد باهات صحبت کنه...\n"
+            "📡 اما نگران نباش! من دستیار هوش مصنوعی نادمم 😎\n"
+            "وظیفه‌م اینه تا وقتی آقا خودش برگشت، حواسم به همه چی باشه!\n\n"
+            "🧠 اگه سوالی داری، همین حالا بپرس تا راهنماییت کنم."
         )
 
     text = msg.text or ""
@@ -115,19 +111,18 @@ def handle_message(update, context):
     else:
         msg.reply_text("پیامتو دیدم 😄 هر چی با متن بهم بگی بهتر می‌تونم راهنماییت کنم!")
 
-# 🎛️ تنظیمات آنلاین/آفلاین توسط نادم
 def go_offline(update, context):
     if update.effective_user.id == OWNER_ID:
         set_offline()
         update.message.reply_text("🟠 نادم آفلاین شد. من مراقبم 😎")
+
 def go_online(update, context):
     if update.effective_user.id == OWNER_ID:
         set_online()
         update.message.reply_text("🟢 نادم آنلاین شد. دیگه من سکوت می‌کنم 😇")
 
-# 🚀 اجرای ربات
 def main():
-    updater = Updater("7977751221:AAHBPEXCseUUdFIqX0Tumw7lqzxVR_Mz7LM", use_context=True)
+    updater = Updater(TELEGRAM_BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("offline", go_offline))
@@ -140,4 +135,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
